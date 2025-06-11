@@ -24,7 +24,6 @@ const (
 	dbPingTimeout       = 10 * time.Millisecond
 )
 
-// Template for the homepage with modern Tailwind CSS styling
 var homeTmpl = template.Must(template.New("home").Parse(`<!DOCTYPE html>
 <html lang="en" class="h-full">
 <head>
