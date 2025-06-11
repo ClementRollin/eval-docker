@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
+	"html/template"
 	"log"
 	"net/http"
 	"os"
@@ -24,13 +24,54 @@ const (
 	dbPingTimeout       = 10 * time.Millisecond
 )
 
+// Template for the homepage
+var homeTmpl = template.Must(template.New("home").Parse(`<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Go Docker Exam App</title>
+</head>
+<body>
+    <h1>Welcome to Go Docker Exam App</h1>
+    <h2>Add a User</h2>
+    <form action="/" method="post">
+        <label for="name">Name:</label>
+        <input type="text" id="name" name="name" required>
+        <button type="submit">Add</button>
+    </form>
+    <h2>All Users</h2>
+    <ul>
+    {{range .Users}}
+        <li>{{.ID}} - {{.Name}}</li>
+    {{else}}
+        <li>No users yet.</li>
+    {{end}}
+    </ul>
+    <p><a href="/_internal/health">Health Check</a> | <a href="/api/users">JSON API</a></p>
+</body>
+</html>`))
+
+// App holds the database pool
 type App struct {
 	db *pgxpool.Pool
 }
 
+// User represents a user record
+type User struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// GetUsersResponse for JSON API
+type GetUsersResponse struct {
+	Users []User `json:"users"`
+}
+
+// initDB initializes the database connection and schema
 func initDB() (*pgxpool.Pool, error) {
-	dbPassword := os.Getenv(DbPasswordEnvKey)
 	dbUser := os.Getenv(DbUserEnvKey)
+	dbPassword := os.Getenv(DbPasswordEnvKey)
 	dbHost := os.Getenv(DbHostEnvKey)
 	dbPort := os.Getenv(DbPortEnvKey)
 	dbName := os.Getenv(DbNameEnvKey)
@@ -47,184 +88,129 @@ func initDB() (*pgxpool.Pool, error) {
 		dbName = "postgres"
 	}
 
-	// config, err := pgx.ParseConfig(
-	// 	fmt.Sprintf(
-	// 		"postgres://%s:%s@%s:%s/%s?sslmode=disable",
-	// 		dbUser, dbPassword, dbHost, dbPort, dbName,
-	// 	),
-	// )
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	ctx, cancel := context.WithTimeout(
-		context.Background(), dbConnectionTimeout,
-	)
+	ctx, cancel := context.WithTimeout(context.Background(), dbConnectionTimeout)
 	defer cancel()
 
-	pool, err := pgxpool.New(
-		ctx, fmt.Sprintf(
-			"postgres://%s:%s@%s:%s/%s?sslmode=disable",
-			dbUser, dbPassword, dbHost, dbPort, dbName,
-		),
-	)
-	// conn, err := pgx.ConnectConfig(ctx, config)
+	url := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", dbUser, dbPassword, dbHost, dbPort, dbName)
+	pool, err := pgxpool.New(ctx, url)
 	if err != nil {
 		return nil, err
 	}
 
-	log.Printf("Connected to DB %s:%s\n", dbHost, dbPort)
+	log.Printf("Connected to DB %s:%s", dbHost, dbPort)
 
-	_, err = pool.Exec(
-		context.Background(),
-		"CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, name TEXT NOT NULL);",
-	)
+	// Create table if not exists
+	_, err = pool.Exec(context.Background(), `CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, name TEXT NOT NULL);`)
 	if err != nil {
 		return nil, err
 	}
-
 	return pool, nil
 }
 
+// initApp sets up the App struct
 func initApp() (*App, error) {
-	db, err := initDB()
+	pool, err := initDB()
 	if err != nil {
-		log.Fatalf("Failed to init db: %v\n", err)
 		return nil, err
 	}
-
-	return &App{db}, err
+	return &App{db: pool}, nil
 }
 
-type User struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
+// handleHome serves homepage and handles form submits
+func (app *App) handleHome(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		rows, err := app.db.Query(r.Context(), "SELECT id, name FROM users;")
+		if err != nil {
+			http.Error(w, "Failed to load users", http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+
+		users := []User{}
+		for rows.Next() {
+			var u User
+			if err := rows.Scan(&u.ID, &u.Name); err != nil {
+				http.Error(w, "Error scanning user", http.StatusInternalServerError)
+				return
+			}
+			users = append(users, u)
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		homeTmpl.Execute(w, struct{ Users []User }{Users: users})
+
+	case http.MethodPost:
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "Invalid form data", http.StatusBadRequest)
+			return
+		}
+		name := r.FormValue("name")
+		if name != "" {
+			if _, err := app.db.Exec(r.Context(), "INSERT INTO users (name) VALUES ($1)", name); err != nil {
+				http.Error(w, "Failed to add user", http.StatusInternalServerError)
+				return
+			}
+		}
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+
+	default:
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	}
 }
 
-type GetUsersResponse struct {
-	Users []User `json:"users"`
-}
-
+// handleGetUsers serves JSON API for users
 func (app *App) handleGetUsers(w http.ResponseWriter, r *http.Request) {
-	_ = r
 	w.Header().Set("Content-Type", "application/json")
 
-	rows, err := app.db.Query(r.Context(), "SELECT * FROM users;")
+	rows, err := app.db.Query(r.Context(), "SELECT id, name FROM users;")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
 
-	users := make([]User, 0)
+	users := []User{}
 	for rows.Next() {
-		var id int
-		var name string
-		err = rows.Scan(&id, &name)
-		if err != nil {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Name); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		users = append(users, User{ID: id, Name: name})
+		users = append(users, u)
 	}
 
-	response := GetUsersResponse{Users: users}
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Printf("Error encoding JSON response: %v\n", err)
-	}
+	json.NewEncoder(w).Encode(GetUsersResponse{Users: users})
 }
 
-type AddUserRequest struct {
-	Name string `json:"name"`
-}
-
-type UserResponse struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
-}
-
-func (app *App) handleAddUser(w http.ResponseWriter, r *http.Request) {
-	defer func(Body io.ReadCloser) {
-		_ = Body.Close()
-	}(r.Body)
-
-	w.Header().Set("Content-Type", "application/json")
-
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	var req AddUserRequest
-	if err := decoder.Decode(&req); err != nil {
-		http.Error(w, `{"error": "Invalid request payload"}`, http.StatusBadRequest)
-		log.Printf("Error decoding request body: %v\n", err)
-		return
-	}
-
-	if req.Name == "" {
-		http.Error(w, `{"error": "Name is required"}`, http.StatusBadRequest)
-		return
-	}
-
-	var newUserID int
-	err := app.db.QueryRow(
-		r.Context(),
-		"INSERT INTO users (name) VALUES ($1) RETURNING id",
-		req.Name,
-	).Scan(&newUserID)
-
-	if err != nil {
-		http.Error(w, `{"error": "Failed to add user to database"}`, http.StatusInternalServerError)
-		log.Printf("Error inserting user: %v\n", err)
-		return
-	}
-
-	w.WriteHeader(http.StatusCreated)
-	response := UserResponse{ID: newUserID, Name: req.Name}
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Printf("Error encoding JSON response: %v\n", err)
-	}
-}
-
+// handleHealthCheck for Kubernetes or orchestrators
 func (app *App) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
-	_ = r
-
 	ctx, cancel := context.WithTimeout(context.Background(), dbPingTimeout)
 	defer cancel()
 
 	err := app.db.Ping(ctx)
 	if err != nil {
-		log.Printf("Health check ERROR: %v\n", err.Error())
+		log.Printf("Health check ERROR: %v", err)
 		w.WriteHeader(http.StatusBadGateway)
 		return
 	}
-
-	log.Printf("Health check OK")
+	w.WriteHeader(http.StatusOK)
 }
 
 func main() {
 	app, err := initApp()
 	if err != nil {
-		log.Fatalf("Failed to init app: %v\n", err)
-		return
+		log.Fatalf("Failed to init app: %v", err)
 	}
 
-	http.HandleFunc(
-		"/api/users", func(w http.ResponseWriter, r *http.Request) {
-			switch r.Method {
-			case http.MethodGet:
-				app.handleGetUsers(w, r)
-			case http.MethodPost:
-				app.handleAddUser(w, r)
-			}
-		},
-	)
-
-	http.HandleFunc(
-		"/_internal/health", app.handleHealthCheck,
-	)
+	http.HandleFunc("/", app.handleHome)
+	http.HandleFunc("/api/users", app.handleGetUsers)
+	http.HandleFunc("/_internal/health", app.handleHealthCheck)
 
 	port := os.Getenv(AppPortEnvKey)
 	if port == "" {
 		port = "8080"
 	}
+	log.Printf("Listening on :%s", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
