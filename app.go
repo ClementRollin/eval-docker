@@ -24,51 +24,65 @@ const (
 	dbPingTimeout       = 10 * time.Millisecond
 )
 
-// Template for the homepage
+// Template for the homepage with modern Tailwind CSS styling
 var homeTmpl = template.Must(template.New("home").Parse(`<!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="h-full">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Go Docker Exam App</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Go Docker Exam App</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { darkMode: 'media' }
+  </script>
 </head>
-<body>
-    <h1>Welcome to Go Docker Exam App</h1>
-    <h2>Add a User</h2>
-    <form action="/" method="post">
-        <label for="name">Name:</label>
-        <input type="text" id="name" name="name" required>
-        <button type="submit">Add</button>
-    </form>
-    <h2>All Users</h2>
-    <ul>
-    {{range .Users}}
-        <li>{{.ID}} - {{.Name}}</li>
-    {{else}}
-        <li>No users yet.</li>
-    {{end}}
-    </ul>
-    <p><a href="/_internal/health">Health Check</a> | <a href="/api/users">JSON API</a></p>
+<body class="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 min-h-full flex flex-col">
+  <header class="bg-white dark:bg-gray-800 shadow p-4">
+    <h1 class="text-3xl font-bold text-center">Go Docker Exam App</h1>
+  </header>
+  <main class="flex-1 container mx-auto p-6">
+    <section class="mb-8">
+      <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+        <h2 class="text-2xl font-semibold mb-4">Add a User</h2>
+        <form action="/" method="post" class="flex space-x-2">
+          <input type="text" name="name" placeholder="Enter name" required class="flex-1 px-4 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:border-gray-600" />
+          <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition">Add</button>
+        </form>
+      </div>
+    </section>
+    <section>
+      <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+        <h2 class="text-2xl font-semibold mb-4">All Users</h2>
+        <ul class="space-y-2">
+          {{range .Users}}
+            <li class="p-4 bg-gray-50 dark:bg-gray-700 rounded-md">{{.ID}} - {{.Name}}</li>
+          {{else}}
+            <li class="p-4 bg-gray-50 dark:bg-gray-700 rounded-md">No users yet.</li>
+          {{end}}
+        </ul>
+      </div>
+    </section>
+  </main>
+  <footer class="bg-white dark:bg-gray-800 shadow p-4 text-center">
+    <a href="/_internal/health" class="text-white-600 hover:underline mr-4">Health Check</a>
+    <a href="/api/users" class="text-white-600 hover:underline">JSON API</a>
+  </footer>
 </body>
 </html>`))
 
-// App holds the database pool
 type App struct {
 	db *pgxpool.Pool
 }
 
-// User represents a user record
 type User struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
 }
 
-// GetUsersResponse for JSON API
 type GetUsersResponse struct {
 	Users []User `json:"users"`
 }
 
-// initDB initializes the database connection and schema
 func initDB() (*pgxpool.Pool, error) {
 	dbUser := os.Getenv(DbUserEnvKey)
 	dbPassword := os.Getenv(DbPasswordEnvKey)
@@ -96,10 +110,8 @@ func initDB() (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	log.Printf("Connected to DB %s:%s", dbHost, dbPort)
 
-	// Create table if not exists
 	_, err = pool.Exec(context.Background(), `CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, name TEXT NOT NULL);`)
 	if err != nil {
 		return nil, err
@@ -107,7 +119,6 @@ func initDB() (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
-// initApp sets up the App struct
 func initApp() (*App, error) {
 	pool, err := initDB()
 	if err != nil {
@@ -116,7 +127,6 @@ func initApp() (*App, error) {
 	return &App{db: pool}, nil
 }
 
-// handleHome serves homepage and handles form submits
 func (app *App) handleHome(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -159,7 +169,6 @@ func (app *App) handleHome(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleGetUsers serves JSON API for users
 func (app *App) handleGetUsers(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -183,7 +192,6 @@ func (app *App) handleGetUsers(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(GetUsersResponse{Users: users})
 }
 
-// handleHealthCheck for Kubernetes or orchestrators
 func (app *App) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), dbPingTimeout)
 	defer cancel()
