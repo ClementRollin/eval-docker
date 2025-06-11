@@ -64,8 +64,8 @@ var homeTmpl = template.Must(template.New("home").Parse(`<!DOCTYPE html>
     </section>
   </main>
   <footer class="bg-white dark:bg-gray-800 shadow p-4 text-center">
-    <a href="/_internal/health" class="text-white-600 hover:underline mr-4">Health Check</a>
-    <a href="/api/users" class="text-white-600 hover:underline">JSON API</a>
+    <a href="/_internal/health" target="_blank" class="text-white-600 hover:underline mr-4">Health Check</a>
+    <a href="/api/users" target="_blank" class="text-white-600 hover:underline">JSON API</a>
   </footer>
 </body>
 </html>`))
